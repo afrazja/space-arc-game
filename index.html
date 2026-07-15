@@ -2140,10 +2140,11 @@ function update(dt) {
 
 function hurtPlayer(dmg) {
   if (player.invuln > 0) return;   // respawn grace period
-  // armor bought in the shop soaks damage before the hull takes any
-  const absorbed = Math.min(player.armor, dmg);
-  player.armor -= absorbed;
-  player.hull -= dmg - absorbed;
+  // armor REDUCES incoming damage (up to 50% at full) and wears down as it's
+  // hit — so its protection fades the more punishment it takes.
+  const reduction = 0.5 * (player.armor / 100);
+  player.hull -= dmg * (1 - reduction);
+  if (player.armor > 0) player.armor = Math.max(0, player.armor - dmg * 0.5);
   player.hitFlash = 0.25;
   sfx.hurt();
   if (!reducedMotion) state.shake = Math.max(state.shake, 5);
@@ -2263,14 +2264,19 @@ function draw() {
 
 function drawPlayer() {
   if (player.hull <= 0) return;
-  // armor: a hollow white halo around the ship, brighter the more armor remains
+  // armor: a soft aura of light around the ship, fainter as armor wears down
   if (player.armor > 0) {
-    const a = 0.18 + 0.62 * (player.armor / 100);
-    ctx.strokeStyle = "rgba(255,255,255," + a + ")";
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.arc(player.x, player.y, 30, 0, Math.PI * 2);
-    ctx.stroke();
+    const a = (player.armor / 100) * (0.82 + 0.18 * Math.sin(state.time * 3.5));
+    const grd = ctx.createRadialGradient(player.x, player.y, 9, player.x, player.y, 37);
+    grd.addColorStop(0, "rgba(215,238,255,0)");
+    grd.addColorStop(0.55, "rgba(215,238,255," + (0.14 * a) + ")");
+    grd.addColorStop(0.83, "rgba(255,255,255," + (0.55 * a) + ")");
+    grd.addColorStop(1, "rgba(190,220,255,0)");
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    ctx.fillStyle = grd;
+    ctx.fillRect(player.x - 37, player.y - 37, 74, 74);
+    ctx.restore();
   }
   ctx.save();
   // respawn grace: the ship blinks while untouchable
@@ -2589,7 +2595,7 @@ function renderStore() {
   head("SUPPLIES");
   row(`<div class="info"><b>HULL REPAIR +40</b><br>hull: ${Math.round(player.hull)}/${player.maxHull}</div>
     <button class="buyBtn" data-act="sup" data-id="repair" ${state.credits < 120 ? "disabled" : ""}>120 CR</button>`);
-  row(`<div class="info"><b>ARMOR PLATING +25</b><br>white halo, soaks damage before hull (${Math.round(player.armor)}/100)</div>
+  row(`<div class="info"><b>ARMOR PLATING +25</b><br>light aura &middot; cuts incoming damage up to 50%, wears down as it's hit (${Math.round(player.armor)}/100)</div>
     <button class="buyBtn" data-act="sup" data-id="armor" ${player.armor >= 100 || state.credits < 180 ? "disabled" : ""}>
       ${player.armor >= 100 ? "MAX" : "180 CR"}</button>`);
   row(`<div class="info"><b>NANO CELL</b><br>banks toward an extra life &middot; &#9829;${player.lives}/${maxLives()}</div>
@@ -2928,7 +2934,7 @@ function frame(now) {
 requestAnimationFrame(frame);
 
 // ---------- Version + auto-update ----------
-const APP_VERSION = "1.5";
+const APP_VERSION = "1.6";
 document.getElementById("versionLine").textContent = "v" + APP_VERSION;
 
 // A new build ships a byte-changed sw.js (its CACHE constant is bumped), so the
