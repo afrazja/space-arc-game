@@ -1340,10 +1340,9 @@ const player = {
   lives: 1,            // spare ships; dying consumes one (max 6 via skills)
   revive: 0,           // overheal bar 0-100; full bar converts to +1 life
   invuln: 0,           // seconds of invulnerability after a respawn
-  rockets: 0,          // homing rocket ammo
+  ammo: { rockets: 0, flak: 0, tesla: 0 },  // secondary guns are finite; refill in the shop
   cdBlaster: 0, cdRocket: 0, cdFlak: 0, cdTesla: 0,
-  energy: 100, maxEnergy: 100,
-  overheated: false,   // laser must recover after hitting 0
+  energy: 100, maxEnergy: 100,   // laser's finite tank — drains, no regen, refill in shop
   hitFlash: 0,
   flame: 0,            // engine flicker phase
   tilt: 0,             // banking angle while steering
@@ -1473,13 +1472,29 @@ function addXp(n, silent) {
   }
 }
 
-// the armory: what credits can buy, gated by pilot level
+// the armory: what credits can buy, gated by pilot level.
+// every secondary gun is finite — comes with ammo0 and refills for refillCost.
 const WEAPON_SHOP = [
-  { id: "rockets", name: "HOMING ROCKETS", desc: "seek the nearest ship, splash damage — uses ammo", cost: 400, lvl: 2 },
-  { id: "laser",   name: "LASER",          desc: "piercing beam, 3&times; vs shields — uses energy",  cost: 500, lvl: 4 },
-  { id: "flak",    name: "FLAK CANNON",    desc: "9-pellet cone — brutal up close, short range",      cost: 600, lvl: 6 },
-  { id: "tesla",   name: "TESLA ARC",      desc: "lightning chains through up to 3 ships",            cost: 700, lvl: 8 },
+  { id: "rockets", name: "HOMING ROCKETS", desc: "seek the nearest ship, splash blast", cost: 400, lvl: 2,
+    ammo0: 8, refill: 8, refillCost: 60 },
+  { id: "laser",   name: "LASER",          desc: "piercing beam, 3&times; vs shields", cost: 500, lvl: 4,
+    laser: true, refillCost: 90 },
+  { id: "flak",    name: "FLAK CANNON",    desc: "9-pellet cone, long reach, heavy hits", cost: 600, lvl: 6,
+    ammo0: 10, refill: 10, refillCost: 70 },
+  { id: "tesla",   name: "TESLA ARC",      desc: "lightning chains through up to 5 ships", cost: 700, lvl: 8,
+    ammo0: 12, refill: 12, refillCost: 80 },
 ];
+// current ammo for a weapon, as a display string; laser reports its energy %
+function weaponAmmoStr(w) {
+  if (w === "laser") return Math.round((player.energy / player.maxEnergy) * 100) + "%";
+  if (w in player.ammo) return String(player.ammo[w]);
+  return "";
+}
+function weaponEmpty(w) {
+  if (w === "blaster") return false;
+  if (w === "laser") return player.energy <= 0;
+  return player.ammo[w] <= 0;
+}
 const SKILLS = [
   { id: "hull",    name: "REINFORCED HULL", desc: "+15 max hull",   max: 6 },
   { id: "energy",  name: "CAPACITORS",      desc: "+10 max energy", max: 5 },
@@ -1522,33 +1537,35 @@ function fireWeapons(dt) {
       sfx.shoot();
     }
 
-    if (w === "rockets" && player.cdRocket <= 0 && player.rockets > 0) {
+    if (w === "rockets" && player.cdRocket <= 0 && player.ammo.rockets > 0) {
       player.cdRocket = 0.5;
-      player.rockets--;
-      const side = player.rockets % 2 ? -1 : 1;
+      player.ammo.rockets--;
+      const side = player.ammo.rockets % 2 ? -1 : 1;
       bullets.push({ x: player.x + side * 12, y: player.y - 8, vx: side * 60, vy: -240,
                      r: 5, dmg: 2, kind: "rocket", life: 3, trail: 0 });
       sfx.rocket();
     }
 
-    if (w === "flak" && player.cdFlak <= 0) {
-      player.cdFlak = 1.0;
+    if (w === "flak" && player.cdFlak <= 0 && player.ammo.flak > 0) {
+      // buffed: pellets fly farther (longer life) and hit much harder
+      player.cdFlak = 0.9;
+      player.ammo.flak--;
       for (let i = 0; i < 9; i++) {
         const a = -Math.PI / 2 + (i - 4) * 0.11 + (Math.random() - 0.5) * 0.05;
-        const sp = 480 + Math.random() * 80;
+        const sp = 520 + Math.random() * 90;
         bullets.push({ x: player.x, y: player.y - 14, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp,
-                       r: 2.5, dmg: 1.2 * dmgMult(), kind: "pellet", life: 0.34 });
+                       r: 2.8, dmg: 1.8 * dmgMult(), kind: "pellet", life: 0.55 });
       }
       sfx.flak();
     }
 
-    if (w === "tesla" && player.cdTesla <= 0) {
-      // chain lightning: nearest ship, then jumps to up to 2 more
+    if (w === "tesla" && player.cdTesla <= 0 && player.ammo.tesla > 0) {
+      // buffed: chains through up to 5 ships, wider reach, more damage
       const targets = [];
       let from = { x: player.x, y: player.y - 14 };
-      const chainDmg = [3.2, 2.2, 1.4];
-      for (let hop = 0; hop < 3; hop++) {
-        let best = null, bd = hop === 0 ? 280 : 150;
+      const chainDmg = [4, 3.2, 2.4, 1.8, 1.4];
+      for (let hop = 0; hop < 5; hop++) {
+        let best = null, bd = hop === 0 ? 330 : 230;
         for (const en of enemies) {
           if (targets.includes(en)) continue;
           const d = Math.hypot(en.x - from.x, en.y - from.y);
@@ -1559,7 +1576,8 @@ function fireWeapons(dt) {
         from = best;
       }
       if (targets.length) {
-        player.cdTesla = 0.9;
+        player.cdTesla = 0.85;
+        player.ammo.tesla--;
         const pts = [[player.x, player.y - 14]];
         targets.forEach((en, i) => {
           pts.push([en.x, en.y]);
@@ -1573,22 +1591,15 @@ function fireWeapons(dt) {
     if (w === "laser") laserWanted = true;
   }
 
-  if (laserWanted && !player.overheated) {
-    player.energy -= 34 * dt;
-    if (player.energy <= 0) {
-      player.energy = 0;
-      player.overheated = true;
-    } else {
-      laserBeam = { x: player.x, width: 8 };
-      for (const en of enemies) {
-        if (Math.abs(en.x - player.x) < en.r + laserBeam.width && en.y < player.y) {
-          damageEnemy(en, 16 * dmgMult() * dt, true, "laser");
-        }
+  // laser draws from a finite energy tank that does NOT regenerate — refill in the shop
+  if (laserWanted && player.energy > 0) {
+    player.energy = Math.max(0, player.energy - 34 * dt);
+    laserBeam = { x: player.x, width: 8 };
+    for (const en of enemies) {
+      if (Math.abs(en.x - player.x) < en.r + laserBeam.width && en.y < player.y) {
+        damageEnemy(en, 16 * dmgMult() * dt, true, "laser");
       }
     }
-  } else {
-    player.energy = Math.min(player.maxEnergy, player.energy + 24 * dt);
-    if (player.energy > 30) player.overheated = false;
   }
 }
 
@@ -2252,6 +2263,15 @@ function draw() {
 
 function drawPlayer() {
   if (player.hull <= 0) return;
+  // armor: a hollow white halo around the ship, brighter the more armor remains
+  if (player.armor > 0) {
+    const a = 0.18 + 0.62 * (player.armor / 100);
+    ctx.strokeStyle = "rgba(255,255,255," + a + ")";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(player.x, player.y, 30, 0, Math.PI * 2);
+    ctx.stroke();
+  }
   ctx.save();
   // respawn grace: the ship blinks while untouchable
   if (player.invuln > 0 && Math.floor(state.time * 12) % 2 === 0) ctx.globalAlpha = 0.35;
@@ -2282,49 +2302,31 @@ function drawPlayer() {
   ctx.restore();
 }
 
-// ship status cluster, right under the ship where your eyes are:
-// hull, armor (when present), energy warning (when low), rocket ammo pips
+// ship status under the ship: hull bar, then the ammo left in each secondary gun
+// (armor is drawn as a ring around the ship, in drawPlayer)
 function drawPlayerBars() {
   if (!state.running || player.hull <= 0) return;
-  const bw = 38, x = player.x - bw / 2;
+  const bw = 46, x = player.x - bw / 2;
   let y = player.y + 36;
   const pct = player.hull / player.maxHull;
   ctx.fillStyle = "rgba(255,255,255,0.14)";
   ctx.fillRect(x, y, bw, 4);
   ctx.fillStyle = pct < 0.3 ? COLORS.danger : pct < 0.6 ? COLORS.ember : COLORS.cyan;
   ctx.fillRect(x, y, bw * pct, 4);
-  y += 6;
-  if (player.armor > 0) {
-    ctx.fillStyle = "rgba(255,255,255,0.1)";
-    ctx.fillRect(x, y, bw, 2.5);
-    ctx.fillStyle = COLORS.dim;
-    ctx.fillRect(x, y, bw * (player.armor / 100), 2.5);
-    y += 4.5;
+  y += 9;
+  // ammo readout for the two equipped secondary guns
+  ctx.font = "8px " + getComputedStyle(document.body).getPropertyValue("--mono");
+  ctx.textAlign = "center";
+  for (const key of ["V", "B"]) {
+    const s = key === "V" ? 1 : 2;
+    const w = pilot.loadout[s];
+    if (!w) continue;
+    const empty = weaponEmpty(w);
+    ctx.fillStyle = empty ? COLORS.danger : "rgba(220,235,250,0.85)";
+    ctx.fillText(key + " " + WEAPON_NAMES[w] + " " + (empty ? "EMPTY" : weaponAmmoStr(w)), player.x, y);
+    y += 10;
   }
-  // laser energy appears here only when it needs attention: low or overheated
-  if (pilot.loadout.includes("laser") && (player.overheated || player.energy < player.maxEnergy * 0.35)) {
-    const flash = player.overheated && Math.floor(state.time * 8) % 2 === 0;
-    ctx.fillStyle = "rgba(255,255,255,0.1)";
-    ctx.fillRect(x, y, bw, 2.5);
-    ctx.fillStyle = flash ? "#ffffff" : player.overheated ? COLORS.danger : COLORS.rose;
-    ctx.fillRect(x, y, bw * (player.energy / player.maxEnergy), 2.5);
-    y += 4.5;
-  }
-  // rocket ammo pips (up to two rows of 10)
-  if (pilot.loadout.includes("rockets")) {
-    if (player.rockets > 0) {
-      ctx.fillStyle = COLORS.ember;
-      const n = Math.min(player.rockets, 20);
-      for (let i = 0; i < n; i++) {
-        ctx.fillRect(x + (i % 10) * 4, y + Math.floor(i / 10) * 4, 2.5, 2.5);
-      }
-    } else {
-      ctx.fillStyle = COLORS.dim;
-      ctx.font = "9px " + getComputedStyle(document.body).getPropertyValue("--mono");
-      ctx.textAlign = "left";
-      ctx.fillText("NO AMMO", x, y + 4);
-    }
-  }
+  ctx.textAlign = "left";
 }
 
 function drawEnemies() {
@@ -2503,15 +2505,12 @@ function updateHUD() {
   el.levelNum.textContent = state.level;
   el.livesTxt.textContent = "♥" + player.lives;
   el.xpNow.textContent = state.xpEarned;   // XP gathered this level, banked at level end
-  // touch fire buttons mirror slots 2 / 3: weapon name, dimmed when unusable
+  // touch fire buttons mirror slots V / B: weapon name + ammo, dimmed when empty
   for (let i = 0; i < 2; i++) {
     const s = i + 1;
     const w = pilot.loadout[s];
-    const unlocked = s < slotsUnlocked();
-    const label = !unlocked ? "LVL " + (s === 1 ? 4 : 10) : w ? WEAPON_NAMES[w] : "—";
-    let off = !unlocked || !w;
-    if (w === "rockets" && player.rockets <= 0) off = true;
-    if (w === "laser" && player.overheated) off = true;
+    const label = w ? WEAPON_NAMES[w] + (w === "blaster" ? "" : " " + weaponAmmoStr(w)) : "—";
+    const off = !w || weaponEmpty(w);
     if (el.fireBtns[i].textContent !== label) el.fireBtns[i].textContent = label;
     el.fireBtns[i].classList.toggle("off", off);
   }
@@ -2571,15 +2570,26 @@ function renderStore() {
         ${owned ? "OWNED" : locked ? "LVL " + w.lvl : w.cost + " CR"}</button>`);
   }
 
-  // -- supplies
-  head("SUPPLIES");
-  if (pilot.weapons.includes("rockets")) {
-    row(`<div class="info"><b>ROCKET AMMO +6</b><br>in the tubes now: ${player.rockets}</div>
-      <button class="buyBtn" data-act="sup" data-id="ammo" ${state.credits < 60 ? "disabled" : ""}>60 CR</button>`);
+  // -- ammo refills for each owned secondary gun (nothing is infinite)
+  head("AMMO &amp; RESUPPLY");
+  for (const w of WEAPON_SHOP) {
+    if (!pilot.weapons.includes(w.id)) continue;
+    if (w.laser) {
+      const full = player.energy >= player.maxEnergy;
+      row(`<div class="info"><b>LASER CHARGE</b><br>refill the beam &middot; energy ${Math.round(player.energy)}/${player.maxEnergy}</div>
+        <button class="buyBtn" data-act="sup" data-id="laser" ${full || state.credits < w.refillCost ? "disabled" : ""}>
+          ${full ? "FULL" : w.refillCost + " CR"}</button>`);
+    } else {
+      row(`<div class="info"><b>${w.name} +${w.refill}</b><br>in stock: ${player.ammo[w.id]}</div>
+        <button class="buyBtn" data-act="sup" data-id="${w.id}" ${state.credits < w.refillCost ? "disabled" : ""}>${w.refillCost} CR</button>`);
+    }
   }
+
+  // -- ship supplies
+  head("SUPPLIES");
   row(`<div class="info"><b>HULL REPAIR +40</b><br>hull: ${Math.round(player.hull)}/${player.maxHull}</div>
     <button class="buyBtn" data-act="sup" data-id="repair" ${state.credits < 120 ? "disabled" : ""}>120 CR</button>`);
-  row(`<div class="info"><b>ARMOR PLATING +25</b><br>soaks damage before hull (${Math.round(player.armor)}/100)</div>
+  row(`<div class="info"><b>ARMOR PLATING +25</b><br>white halo, soaks damage before hull (${Math.round(player.armor)}/100)</div>
     <button class="buyBtn" data-act="sup" data-id="armor" ${player.armor >= 100 || state.credits < 180 ? "disabled" : ""}>
       ${player.armor >= 100 ? "MAX" : "180 CR"}</button>`);
   row(`<div class="info"><b>NANO CELL</b><br>banks toward an extra life &middot; &#9829;${player.lives}/${maxLives()}</div>
@@ -2594,8 +2604,9 @@ function buyWeapon(id) {
   if (!w || pilot.weapons.includes(id) || pilot.level < w.lvl || state.credits < w.cost) { sfx.denied(); return; }
   state.credits -= w.cost;
   pilot.weapons.push(id);
-  if (id === "rockets") player.rockets += 6;   // comes loaded
-  // auto-equip into the first empty unlocked slot
+  if (w.laser) player.energy = player.maxEnergy;   // comes with a full tank
+  else player.ammo[id] = w.ammo0;                  // comes loaded
+  // auto-equip into the first empty secondary slot
   for (let s = 1; s < slotsUnlocked(); s++) {
     if (!pilot.loadout[s]) { pilot.loadout[s] = id; break; }
   }
@@ -2604,13 +2615,24 @@ function buyWeapon(id) {
 }
 
 function buySupply(id) {
-  const costs = { ammo: 60, repair: 120, armor: 180, nano: 200 };
+  // weapon refills (rockets / flak / tesla / laser)
+  const w = WEAPON_SHOP.find((x) => x.id === id);
+  if (w) {
+    if (state.credits < w.refillCost) { sfx.denied(); return; }
+    if (w.laser && player.energy >= player.maxEnergy) { sfx.denied(); return; }
+    state.credits -= w.refillCost;
+    if (w.laser) player.energy = player.maxEnergy;
+    else player.ammo[id] += w.refill;
+    sfx.buy();
+    return;
+  }
+  // ship supplies
+  const costs = { repair: 120, armor: 180, nano: 200 };
   if (state.credits < costs[id]) { sfx.denied(); return; }
   if (id === "armor" && player.armor >= 100) return;
   if (id === "nano" && player.lives >= maxLives() && player.revive >= 100) return;
   state.credits -= costs[id];
   sfx.buy();
-  if (id === "ammo") player.rockets += 6;
   if (id === "armor") player.armor = Math.min(100, player.armor + 25);
   if (id === "nano") gainRevive(50);
   if (id === "repair") {
@@ -2815,11 +2837,16 @@ function reset() {
                          xpEarned: 0, hitPause: 0,
                          time: 0, score: 0, level: 1, toSpawn: 0, spawnTimer: 1, shake: 0, announce: null });
   const mh = maxHullFor(), me = maxEnergyFor();
+  // each run starts with a fresh loadout of ammo for the guns you own
+  const ammo0 = { rockets: 0, flak: 0, tesla: 0 };
+  for (const w of WEAPON_SHOP) {
+    if (!w.laser && pilot.weapons.includes(w.id)) ammo0[w.id] = w.ammo0;
+  }
   Object.assign(player, { x: W / 2, y: H - 90, hull: mh, maxHull: mh, armor: 0,
                           lives: 1, revive: 0, invuln: 0, speed: speedFor(),
-                          rockets: pilot.weapons.includes("rockets") ? 6 : 0,
+                          ammo: ammo0,
                           cdBlaster: 0, cdRocket: 0, cdFlak: 0, cdTesla: 0,
-                          energy: me, maxEnergy: me, overheated: false, hitFlash: 0,
+                          energy: me, maxEnergy: me, hitFlash: 0,
                           tilt: 0, exhaust: 0 });
   // the pilot (level, skills, weapons) persists between runs — credits, lives and armor don't
   bullets = []; enemyShots = []; enemies = []; particles = []; pickups = []; popups = []; arcs = [];
@@ -2901,7 +2928,7 @@ function frame(now) {
 requestAnimationFrame(frame);
 
 // ---------- Version + auto-update ----------
-const APP_VERSION = "1.4";
+const APP_VERSION = "1.5";
 document.getElementById("versionLine").textContent = "v" + APP_VERSION;
 
 // A new build ships a byte-changed sw.js (its CACHE constant is bumped), so the
