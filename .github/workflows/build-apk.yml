@@ -1,0 +1,67 @@
+name: Build Android APK
+
+# Wraps the web game in a native Android shell (Capacitor) and publishes an
+# installable APK to the "latest" GitHub Release. Runs on every push to main,
+# or manually from the Actions tab. No local Android toolchain needed.
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "README.md"
+      - ".gitignore"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Wrap the game and build a debug APK
+        run: |
+          set -e
+          npm init -y
+          npm install @capacitor/core@6 @capacitor/cli@6 @capacitor/android@6
+          mkdir -p www
+          cp index.html www/index.html
+          cp sw.js manifest.webmanifest icon-192.png icon-512.png www/ 2>/dev/null || true
+          npx cap init "Space Arc" com.afrazja.spacearc --web-dir www
+          npx cap add android
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon
+          cd ..
+          mkdir -p dist
+          cp android/app/build/outputs/apk/debug/app-debug.apk dist/space-arc.apk
+
+      - name: Publish APK to the "latest" release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: Space Arc — Android APK (latest)
+          body: |
+            **space-arc.apk** — download it below and install on Android.
+
+            First time: your phone will ask to allow installing from your
+            browser/files app ("Install unknown apps") — approve it, then open
+            the downloaded file. Built automatically from the newest commit.
+          files: dist/space-arc.apk

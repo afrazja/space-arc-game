@@ -7,6 +7,14 @@ sector. One self-contained HTML file; no build step, no dependencies.
 Play it, and it installs as an app on Android/desktop (Chrome/Edge) via the
 in-game **INSTALL APP** button or the browser's "Add to Home screen".
 
+## Download the Android app (APK)
+
+Grab **space-arc.apk** from the [latest release](../../releases/latest) and
+open it on your phone (approve "install unknown apps" the first time). A
+GitHub Action rebuilds it automatically on every push — see
+`.github/workflows/build-apk.yml`. Note: the APK is a snapshot, so updating it
+means downloading the newer one; the web/installed-PWA version updates itself.
+
 ## Hosting
 
 It's a static site — `index.html` at the root plus the icons, manifest, and
