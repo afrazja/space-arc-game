@@ -1433,16 +1433,26 @@ function freshPilot() {
     xp: 0, level: 1, skillPoints: 0,
     skills: { hull: 0, energy: 0, speed: 0, damage: 0, lifecap: 0 },
     weapons: ["blaster"],
+    gunLevel: { rockets: 1, laser: 1, flak: 1, tesla: 1 },  // per-gun upgrade tiers (MK1-5)
     loadout: ["blaster", null, null],
   };
 }
 let pilot = freshPilot();
 try {
   const saved = JSON.parse(localStorage.getItem("starfall.pilot") || "null");
-  if (saved && saved.level >= 1) pilot = Object.assign(freshPilot(), saved,
-    { skills: Object.assign(freshPilot().skills, saved.skills || {}) });
+  if (saved && saved.level >= 1) pilot = Object.assign(freshPilot(), saved, {
+    skills: Object.assign(freshPilot().skills, saved.skills || {}),
+    gunLevel: Object.assign(freshPilot().gunLevel, saved.gunLevel || {}),
+  });
 } catch (e) { /* corrupted save — start fresh */ }
 function savePilot() { localStorage.setItem("starfall.pilot", JSON.stringify(pilot)); }
+function gunMult(w) { return 1 + (pilot.gunLevel[w] - 1) * 0.25; }   // +25% damage per upgrade tier
+// ensure the pilot owns every gun their level has unlocked (covers older saves too)
+function syncUnlocks() {
+  for (const w of WEAPON_SHOP) {
+    if (pilot.level >= w.lvl && !pilot.weapons.includes(w.id)) pilot.weapons.push(w.id);
+  }
+}
 
 // derived stats — skill points make the pilot permanently stronger
 function maxHullFor()   { return 100 + pilot.skills.hull * 15; }
@@ -1464,8 +1474,15 @@ function addXp(n, silent) {
     if (!silent) {
       sfx.levelup();
       popup(player.x, player.y - 46, "PILOT LEVEL " + pilot.level, COLORS.cyan);
-      if (pilot.level === 4 || pilot.level === 10) {
-        popup(player.x, player.y - 62, "WEAPON SLOT UNLOCKED", COLORS.ember);
+    }
+    // a new secondary gun unlocks for free at its level; comes loaded and auto-equipped
+    for (const wdef of WEAPON_SHOP) {
+      if (wdef.lvl === pilot.level && !pilot.weapons.includes(wdef.id)) {
+        pilot.weapons.push(wdef.id);
+        if (wdef.laser) player.energy = player.maxEnergy;
+        else if (player.ammo) player.ammo[wdef.id] = wdef.ammo0;
+        for (let s = 1; s <= 2; s++) { if (!pilot.loadout[s]) { pilot.loadout[s] = wdef.id; break; } }
+        if (!silent) popup(player.x, player.y - 62, wdef.name + " UNLOCKED", COLORS.ember);
       }
     }
     savePilot();
@@ -1554,7 +1571,7 @@ function fireWeapons(dt) {
         const a = -Math.PI / 2 + (i - 4) * 0.11 + (Math.random() - 0.5) * 0.05;
         const sp = 520 + Math.random() * 90;
         bullets.push({ x: player.x, y: player.y - 14, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp,
-                       r: 2.8, dmg: 1.8 * dmgMult(), kind: "pellet", life: 0.55 });
+                       r: 2.8, dmg: 1.8 * dmgMult() * gunMult("flak"), kind: "pellet", life: 0.55 });
       }
       sfx.flak();
     }
@@ -1581,7 +1598,7 @@ function fireWeapons(dt) {
         const pts = [[player.x, player.y - 14]];
         targets.forEach((en, i) => {
           pts.push([en.x, en.y]);
-          damageEnemy(en, chainDmg[i] * dmgMult(), false, "tesla");
+          damageEnemy(en, chainDmg[i] * dmgMult() * gunMult("tesla"), false, "tesla");
         });
         arcs.push({ pts, life: 0.12, maxLife: 0.12 });
         sfx.tesla();
@@ -1597,7 +1614,7 @@ function fireWeapons(dt) {
     laserBeam = { x: player.x, width: 8 };
     for (const en of enemies) {
       if (Math.abs(en.x - player.x) < en.r + laserBeam.width && en.y < player.y) {
-        damageEnemy(en, 16 * dmgMult() * dt, true, "laser");
+        damageEnemy(en, 16 * dmgMult() * gunMult("laser") * dt, true, "laser");
       }
     }
   }
@@ -1611,7 +1628,7 @@ function rocketBlast(x, y) {
   sfx.explode(false);
   for (const en of enemies) {
     const d = Math.hypot(en.x - x, en.y - y);
-    if (d < 70) damageEnemy(en, (d < 35 ? 4 : 2.5) * dmgMult(), true, "rocket");
+    if (d < 70) damageEnemy(en, (d < 35 ? 4 : 2.5) * dmgMult() * gunMult("rockets"), true, "rocket");
   }
 }
 
@@ -1753,6 +1770,10 @@ function maybeDrop(x, y) {
   const roll = Math.random();
   if (roll < 0.04) pickups.push({ x, y, vy: 70, r: 10, kind: "armor" });
   else if (roll < 0.09) pickups.push({ x, y, vy: 70, r: 10, kind: "repair" });
+  // ammo drops only when a secondary gun is equipped that could use it
+  else if (roll < 0.15 && (pilot.loadout[1] || pilot.loadout[2])) {
+    pickups.push({ x, y, vy: 70, r: 10, kind: "ammo" });
+  }
 }
 
 // ---------- Particles ----------
@@ -2095,6 +2116,19 @@ function update(dt) {
     if (Math.hypot(p.x - player.x, p.y - player.y) < p.r + player.r + 6) {
       p.taken = true;
       if (p.kind === "armor") { player.armor = Math.min(100, player.armor + 10); popup(p.x, p.y, "+10 ARMOR", COLORS.dim); }
+      else if (p.kind === "ammo") {
+        // refill a chunk for a random equipped secondary gun
+        const guns = [pilot.loadout[1], pilot.loadout[2]].filter(Boolean);
+        const g = guns[Math.floor(Math.random() * guns.length)];
+        const wdef = g && WEAPON_SHOP.find((x) => x.id === g);
+        if (wdef && wdef.laser) {
+          player.energy = Math.min(player.maxEnergy, player.energy + 40);
+          popup(p.x, p.y, "+LASER CHARGE", COLORS.rose);
+        } else if (wdef) {
+          player.ammo[g] += Math.max(3, Math.ceil(wdef.refill / 2));
+          popup(p.x, p.y, "+" + WEAPON_NAMES[g] + " AMMO", COLORS.ember);
+        }
+      }
       else {
         const overflow = Math.max(0, 20 - (player.maxHull - player.hull));
         player.hull = Math.min(player.maxHull, player.hull + 20);
@@ -2455,11 +2489,11 @@ function drawPickups() {
   ctx.textBaseline = "middle";
   for (const p of pickups) {
     const pulse = 1 + Math.sin(state.time * 6) * 0.12;
-    ctx.strokeStyle = p.kind === "armor" ? COLORS.dim : COLORS.cyan;
+    ctx.strokeStyle = p.kind === "armor" ? COLORS.dim : p.kind === "ammo" ? COLORS.ember : COLORS.cyan;
     ctx.lineWidth = 1.5;
     ctx.strokeRect(p.x - p.r * pulse, p.y - p.r * pulse, p.r * 2 * pulse, p.r * 2 * pulse);
     ctx.fillStyle = ctx.strokeStyle;
-    ctx.fillText(p.kind === "armor" ? "A" : "+", p.x, p.y + 1);
+    ctx.fillText(p.kind === "armor" ? "A" : p.kind === "ammo" ? "◆" : "+", p.x, p.y + 1);
   }
   ctx.textBaseline = "alphabetic";
 }
@@ -2560,20 +2594,25 @@ function renderStore() {
       chips += `<button class="gunChip ${isCur ? "active" : ""}" data-act="slot" data-slot="${s}" data-w="${w}"
         ${inOther && !isCur ? "disabled" : ""}>${WEAPON_NAMES[w]}</button>`;
     }
-    const hint = owned.length ? "" : `<div class="loadoutHint">buy a weapon in the ARMORY below, then load it here</div>`;
+    const hint = owned.length ? "" : `<div class="loadoutHint">guns unlock as your pilot levels up &mdash; keep flying</div>`;
     h.push(`<div class="loadoutSlot"><div class="loadoutSlotLabel">SLOT ${s + 1} &nbsp;&mdash;&nbsp; FIRE [${slotKey[s]}]</div>` +
            `<div class="gunPicker">${chips}</div>${hint}</div>`);
   }
 
-  // -- armory: buy weapons once, gated by pilot level
-  head("ARMORY");
+  // -- armory: guns unlock free by pilot level; here you UPGRADE the ones you have
+  head("WEAPONS &mdash; UPGRADE");
   for (const w of WEAPON_SHOP) {
-    const owned = pilot.weapons.includes(w.id);
-    const locked = pilot.level < w.lvl;
-    row(`<div class="info"><b>${w.name}</b><br>${w.desc}</div>
-      <button class="buyBtn" data-act="buyw" data-id="${w.id}"
-        ${owned || locked || state.credits < w.cost ? "disabled" : ""}>
-        ${owned ? "OWNED" : locked ? "LVL " + w.lvl : w.cost + " CR"}</button>`);
+    if (!pilot.weapons.includes(w.id)) {
+      row(`<div class="info"><b>${w.name}</b><br>${w.desc}</div>
+        <button class="buyBtn" disabled>PILOT LVL ${w.lvl}</button>`);   // unlocks automatically at this level
+    } else {
+      const gl = pilot.gunLevel[w.id];
+      const cost = 200 * gl;
+      const maxed = gl >= 5;
+      row(`<div class="info"><b>${w.name} MK${gl}</b><br>${w.desc}${maxed ? " &middot; fully upgraded" : " &middot; MK" + (gl + 1) + ": +25% damage"}</div>
+        <button class="buyBtn" data-act="upg" data-id="${w.id}" ${maxed || state.credits < cost ? "disabled" : ""}>
+          ${maxed ? "MAX" : cost + " CR"}</button>`);
+    }
   }
 
   // -- ammo refills for each owned secondary gun (nothing is infinite)
@@ -2605,17 +2644,13 @@ function renderStore() {
   document.getElementById("storeItems").innerHTML = h.join("");
 }
 
-function buyWeapon(id) {
-  const w = WEAPON_SHOP.find((x) => x.id === id);
-  if (!w || pilot.weapons.includes(id) || pilot.level < w.lvl || state.credits < w.cost) { sfx.denied(); return; }
-  state.credits -= w.cost;
-  pilot.weapons.push(id);
-  if (w.laser) player.energy = player.maxEnergy;   // comes with a full tank
-  else player.ammo[id] = w.ammo0;                  // comes loaded
-  // auto-equip into the first empty secondary slot
-  for (let s = 1; s < slotsUnlocked(); s++) {
-    if (!pilot.loadout[s]) { pilot.loadout[s] = id; break; }
-  }
+function upgradeGun(id) {
+  if (!pilot.weapons.includes(id)) { sfx.denied(); return; }
+  const gl = pilot.gunLevel[id];
+  const cost = 200 * gl;
+  if (gl >= 5 || state.credits < cost) { sfx.denied(); return; }
+  state.credits -= cost;
+  pilot.gunLevel[id]++;
   savePilot();
   sfx.buy();
 }
@@ -2681,7 +2716,7 @@ document.getElementById("skillItems").addEventListener("click", (e) => {
 });
 document.getElementById("storeItems").addEventListener("click", (e) => {
   const d = e.target.dataset || {};
-  if (d.act === "buyw") buyWeapon(d.id);
+  if (d.act === "upg") upgradeGun(d.id);
   else if (d.act === "sup") buySupply(d.id);
   else if (d.act === "slot") setSlot(Number(d.slot), d.w || null);
   else return;
@@ -2843,6 +2878,7 @@ function reset() {
                          xpEarned: 0, hitPause: 0,
                          time: 0, score: 0, level: 1, toSpawn: 0, spawnTimer: 1, shake: 0, announce: null });
   const mh = maxHullFor(), me = maxEnergyFor();
+  syncUnlocks();   // make sure the pilot owns every gun their level has unlocked
   // each run starts with a fresh loadout of ammo for the guns you own
   const ammo0 = { rockets: 0, flak: 0, tesla: 0 };
   for (const w of WEAPON_SHOP) {
@@ -2934,7 +2970,7 @@ function frame(now) {
 requestAnimationFrame(frame);
 
 // ---------- Version + auto-update ----------
-const APP_VERSION = "1.6";
+const APP_VERSION = "1.7";
 document.getElementById("versionLine").textContent = "v" + APP_VERSION;
 
 // A new build ships a byte-changed sw.js (its CACHE constant is bumped), so the
