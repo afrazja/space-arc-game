@@ -199,9 +199,56 @@
   .lbRow .rank { color: var(--dim); }
   .lbRow .pts { color: var(--ember); }
 
+  /* ---------- Level-clear wizard ---------- */
+  #levelClearScreen { overflow-y: auto; justify-content: safe center; }
+  .clearStep {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 16px;
+    width: 100%;
+  }
+  .clearStep[hidden] { display: none; }
+  .stepDots { display: flex; gap: 7px; }
+  .stepDots i {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--line);
+  }
+  .stepDots i.on { background: var(--cyan); }
+  .xpPanel { width: min(340px, 86%); text-align: center; }
+  .xpPilotRow {
+    font-size: 12px;
+    letter-spacing: 0.2em;
+    color: var(--cyan);
+    margin-bottom: 12px;
+  }
+  .xpPilotRow span { color: var(--star); font-size: 22px; }
+  .xpBarTrack {
+    height: 16px;
+    border: 1px solid var(--line);
+    background: rgba(77, 227, 255, 0.08);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  #xpBarFill { height: 100%; width: 0%; background: var(--cyan); border-radius: 8px; }
+  .xpNums {
+    margin-top: 10px;
+    font-size: 14px;
+    color: var(--star);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.12em;
+  }
+  .xpGain {
+    margin-top: 4px;
+    font-size: 12px;
+    color: var(--ember);
+    letter-spacing: 0.14em;
+    min-height: 15px;
+  }
+  .xpPilotRow.levelup span { color: var(--ember); }
+
   /* ---------- Shop ---------- */
-  #levelClearScreen { overflow-y: auto; }
-  #shopItems {
+  #shopItems, #skillItems, #storeItems {
     display: flex;
     flex-direction: column;
     gap: 8px;
@@ -394,11 +441,36 @@
     </div>
 
     <div class="overlay" id="levelClearScreen" hidden>
-      <h1 class="title" style="font-size: 22px;" id="levelClearTitle">LEVEL 1 CLEARED</h1>
-      <p class="subtitle" id="xpSummary"></p>
-      <p class="subtitle">SPEND YOUR CREDITS &mdash; CR <span id="shopCredits">0</span></p>
-      <div id="shopItems"></div>
-      <button class="btn" id="nextLevelBtn">NEXT LEVEL</button>
+      <!-- Step 1 of 3: pilot XP -->
+      <div class="clearStep" id="stepXp">
+        <h1 class="title" style="font-size: 22px;" id="levelClearTitle">LEVEL 1 CLEARED</h1>
+        <div class="stepDots"><i class="on"></i><i></i><i></i></div>
+        <div class="xpPanel">
+          <div class="xpPilotRow">PILOT LEVEL <span id="xpPilotLevel">1</span></div>
+          <div class="xpBarTrack"><div id="xpBarFill"></div></div>
+          <div class="xpNums" id="xpBarNums">0 / 300</div>
+          <div class="xpGain" id="xpGainNote">+0 XP</div>
+        </div>
+        <button class="btn" id="xpContinue">CONTINUE &#8594;</button>
+      </div>
+
+      <!-- Step 2 of 3: spend skill points -->
+      <div class="clearStep" id="stepSkills" hidden>
+        <h1 class="title" style="font-size: 22px;">TRAINING</h1>
+        <div class="stepDots"><i></i><i class="on"></i><i></i></div>
+        <p class="subtitle"><span id="skillPointsLeft">0</span> SKILL POINTS TO SPEND</p>
+        <div id="skillItems"></div>
+        <button class="btn" id="skillsContinue">CONTINUE &#8594;</button>
+      </div>
+
+      <!-- Step 3 of 3: store -->
+      <div class="clearStep" id="stepStore" hidden>
+        <h1 class="title" style="font-size: 22px;">HANGAR</h1>
+        <div class="stepDots"><i></i><i></i><i class="on"></i></div>
+        <p class="subtitle">YOU HAVE <span id="storeCredits">0</span> CR</p>
+        <div id="storeItems"></div>
+        <button class="btn" id="nextLevelBtn">NEXT LEVEL &#8594;</button>
+      </div>
     </div>
 
     <div class="overlay" id="installHelp" hidden>
@@ -1355,17 +1427,19 @@ function slotsUnlocked() { return pilot.level >= 10 ? 3 : pilot.level >= 4 ? 2 :
 function blasterBolts() { return pilot.level >= 18 ? 5 : pilot.level >= 12 ? 4 : pilot.level >= 6 ? 3 : 2; }
 
 const XP_PER_LEVEL = 300;  // to advance from level L costs L * 300 xp
-function addXp(n) {
+function addXp(n, silent) {
   if (pilot.level >= 20) return;
   pilot.xp += n;
   while (pilot.level < 20 && pilot.xp >= XP_PER_LEVEL * pilot.level) {
     pilot.xp -= XP_PER_LEVEL * pilot.level;
     pilot.level++;
     pilot.skillPoints++;
-    sfx.levelup();
-    popup(player.x, player.y - 46, "PILOT LEVEL " + pilot.level, COLORS.cyan);
-    if (pilot.level === 4 || pilot.level === 10) {
-      popup(player.x, player.y - 62, "WEAPON SLOT UNLOCKED", COLORS.ember);
+    if (!silent) {
+      sfx.levelup();
+      popup(player.x, player.y - 46, "PILOT LEVEL " + pilot.level, COLORS.cyan);
+      if (pilot.level === 4 || pilot.level === 10) {
+        popup(player.x, player.y - 62, "WEAPON SLOT UNLOCKED", COLORS.ember);
+      }
     }
     savePilot();
   }
@@ -2416,14 +2490,29 @@ function updateHUD() {
 }
 
 // ---------- Shop: armory, loadout, supplies, and pilot training ----------
-function renderShop() {
-  document.getElementById("shopCredits").textContent = state.credits;
+// Step 2: skill training only
+function renderSkills() {
+  document.getElementById("skillPointsLeft").textContent = pilot.skillPoints;
+  const h = [];
+  for (const s of SKILLS) {
+    const cur = pilot.skills[s.id];
+    h.push(`<div class="shopRow"><div class="info"><b>${s.name} ${cur}/${s.max}</b><br>${s.desc}</div>
+      <button class="buyBtn" data-act="skill" data-id="${s.id}"
+        ${cur >= s.max || pilot.skillPoints <= 0 ? "disabled" : ""}>
+        ${cur >= s.max ? "MAX" : "1 PT"}</button></div>`);
+  }
+  document.getElementById("skillItems").innerHTML = h.join("");
+}
+
+// Step 3: loadout + things you buy with credits
+function renderStore() {
+  document.getElementById("storeCredits").textContent = state.credits;
   const h = [];
   const row = (inner) => h.push('<div class="shopRow">' + inner + "</div>");
   const head = (txt) => h.push('<div class="shopHead">' + txt + "</div>");
 
   // -- loadout: 3 slots fired by C / V / B
-  head("LOADOUT &mdash; PILOT LEVEL " + pilot.level);
+  head("LOADOUT");
   const slotKeys = ["C", "V", "B"];
   for (let s = 0; s < 3; s++) {
     const unlocked = s < slotsUnlocked();
@@ -2451,26 +2540,16 @@ function renderShop() {
     row(`<div class="info"><b>ROCKET AMMO +6</b><br>in the tubes now: ${player.rockets}</div>
       <button class="buyBtn" data-act="sup" data-id="ammo" ${state.credits < 60 ? "disabled" : ""}>60 CR</button>`);
   }
-  row(`<div class="info"><b>HULL REPAIR +40</b><br>hull: ${Math.round(player.hull)}/${player.maxHull} &middot; overflow charges the life bar</div>
+  row(`<div class="info"><b>HULL REPAIR +40</b><br>hull: ${Math.round(player.hull)}/${player.maxHull}</div>
     <button class="buyBtn" data-act="sup" data-id="repair" ${state.credits < 120 ? "disabled" : ""}>120 CR</button>`);
   row(`<div class="info"><b>ARMOR PLATING +25</b><br>soaks damage before hull (${Math.round(player.armor)}/100)</div>
     <button class="buyBtn" data-act="sup" data-id="armor" ${player.armor >= 100 || state.credits < 180 ? "disabled" : ""}>
       ${player.armor >= 100 ? "MAX" : "180 CR"}</button>`);
-  row(`<div class="info"><b>NANO CELL</b><br>+50 life bar (${Math.round(player.revive)}/100) &middot; full bar = +1 life, ♥${player.lives}/${maxLives()}</div>
+  row(`<div class="info"><b>NANO CELL</b><br>banks toward an extra life &middot; &#9829;${player.lives}/${maxLives()}</div>
     <button class="buyBtn" data-act="sup" data-id="nano"
       ${(player.lives >= maxLives() && player.revive >= 100) || state.credits < 200 ? "disabled" : ""}>200 CR</button>`);
 
-  // -- training: spend skill points earned from pilot levels
-  head("TRAINING &mdash; " + pilot.skillPoints + " SKILL POINT" + (pilot.skillPoints === 1 ? "" : "S"));
-  for (const s of SKILLS) {
-    const cur = pilot.skills[s.id];
-    row(`<div class="info"><b>${s.name} ${cur}/${s.max}</b><br>${s.desc}</div>
-      <button class="buyBtn" data-act="skill" data-id="${s.id}"
-        ${cur >= s.max || pilot.skillPoints <= 0 ? "disabled" : ""}>
-        ${cur >= s.max ? "MAX" : "1 PT"}</button>`);
-  }
-
-  document.getElementById("shopItems").innerHTML = h.join("");
+  document.getElementById("storeItems").innerHTML = h.join("");
 }
 
 function buyWeapon(id) {
@@ -2527,15 +2606,72 @@ function cycleSlot(s) {
   sfx.pickup();
 }
 
-document.getElementById("shopItems").addEventListener("click", (e) => {
+document.getElementById("skillItems").addEventListener("click", (e) => {
+  const d = e.target.dataset || {};
+  if (d.act !== "skill") return;
+  spendSkill(d.id);
+  renderSkills();
+  updateHUD();
+});
+document.getElementById("storeItems").addEventListener("click", (e) => {
   const d = e.target.dataset || {};
   if (d.act === "buyw") buyWeapon(d.id);
   else if (d.act === "sup") buySupply(d.id);
-  else if (d.act === "skill") spendSkill(d.id);
   else if (d.act === "slot") cycleSlot(Number(d.i));
   else return;
-  renderShop();
+  renderStore();
   updateHUD();
+});
+
+// ---------- Level-clear wizard: XP -> skills -> store ----------
+function showClearStep(id) {
+  for (const s of ["stepXp", "stepSkills", "stepStore"]) {
+    document.getElementById(s).hidden = (s !== id);
+  }
+  document.getElementById("levelClearScreen").scrollTop = 0;
+}
+
+// animate the pilot bar filling with the XP earned this level
+function animateXp(fromLevel, fromXp, gained) {
+  const fill = document.getElementById("xpBarFill");
+  const nums = document.getElementById("xpBarNums");
+  const lvlEl = document.getElementById("xpPilotLevel");
+  const pilotRow = lvlEl.parentElement;
+  const setBar = (lvl, xp) => {
+    const need = XP_PER_LEVEL * lvl;
+    fill.style.width = (lvl >= 20 ? 100 : (xp / need) * 100) + "%";
+    nums.textContent = lvl >= 20 ? "MAX" : Math.floor(xp) + " / " + need;
+    lvlEl.textContent = lvl;
+  };
+  setBar(fromLevel, fromXp);
+  if (gained <= 0 || fromLevel >= 20) { setBar(fromLevel, fromXp); return; }
+  const startT = performance.now();
+  const DUR = 1300;
+  let shownLevel = fromLevel;
+  function step(now) {
+    const t = Math.min(1, (now - startT) / DUR);
+    const eased = 1 - Math.pow(1 - t, 2);
+    let lvl = fromLevel, xp = fromXp + gained * eased;
+    while (lvl < 20 && xp >= XP_PER_LEVEL * lvl) { xp -= XP_PER_LEVEL * lvl; lvl++; }
+    setBar(lvl, xp);
+    if (lvl > shownLevel) {
+      shownLevel = lvl;
+      sfx.levelup();
+      pilotRow.classList.add("levelup");
+      setTimeout(() => pilotRow.classList.remove("levelup"), 500);
+    }
+    if (t < 1) requestAnimationFrame(step);
+  }
+  requestAnimationFrame(step);
+}
+
+document.getElementById("xpContinue").addEventListener("click", () => {
+  if (pilot.skillPoints > 0) { renderSkills(); showClearStep("stepSkills"); }
+  else { renderStore(); showClearStep("stepStore"); }
+});
+document.getElementById("skillsContinue").addEventListener("click", () => {
+  renderStore();
+  showClearStep("stepStore");
 });
 
 // ---------- Level flow ----------
@@ -2553,20 +2689,18 @@ function levelComplete() {
   state.betweenLevels = true;
   state.paused = true;
   setLaserHum(false);
-  // credit the XP banked during this level to the pilot bar
+  // capture the pre-credit bar state, then commit the XP silently so the wizard
+  // can animate the bar filling from where it was
   const gained = state.xpEarned;
-  const lvlBefore = pilot.level;
-  addXp(gained);
+  const fromLevel = pilot.level, fromXp = pilot.xp;
+  addXp(gained, true);
   state.xpEarned = 0;
-  const need = XP_PER_LEVEL * pilot.level;
-  document.getElementById("xpSummary").innerHTML =
-    "+" + gained + " XP &#8594; PILOT " + pilot.level +
-    (pilot.level >= 20 ? " (MAX)" : " &middot; " + pilot.xp + "/" + need) +
-    (pilot.level > lvlBefore ? " &mdash; LEVEL UP!" : "");
   updateHUD();
   document.getElementById("levelClearTitle").textContent = "LEVEL " + state.level + " CLEARED";
-  renderShop();
+  document.getElementById("xpGainNote").textContent = "+" + gained + " XP EARNED";
+  showClearStep("stepXp");
   document.getElementById("levelClearScreen").hidden = false;
+  animateXp(fromLevel, fromXp, gained);
 }
 
 function nextLevel() {
@@ -2729,7 +2863,7 @@ function frame(now) {
 requestAnimationFrame(frame);
 
 // ---------- Version + auto-update ----------
-const APP_VERSION = "1.2";
+const APP_VERSION = "1.3";
 document.getElementById("versionLine").textContent = "v" + APP_VERSION;
 
 // A new build ships a byte-changed sw.js (its CACHE constant is bumped), so the
