@@ -291,6 +291,34 @@
   }
   .buyBtn:disabled { background: var(--line); color: var(--dim); cursor: default; }
 
+  /* secondary-gun loadout picker */
+  .loadoutSlot {
+    border: 1px solid var(--line);
+    background: rgba(11, 21, 38, 0.7);
+    padding: 9px 10px;
+  }
+  .loadoutSlotLabel {
+    font-size: 10px;
+    color: var(--star);
+    letter-spacing: 0.12em;
+    text-align: left;
+    margin-bottom: 8px;
+  }
+  .gunPicker { display: flex; flex-wrap: wrap; gap: 6px; }
+  .gunChip {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.05em;
+    padding: 7px 10px;
+    background: rgba(5, 10, 20, 0.6);
+    color: var(--dim);
+    border: 1px solid var(--line);
+    cursor: pointer;
+  }
+  .gunChip.active { background: var(--cyan); color: var(--ink); border-color: var(--cyan); }
+  .gunChip:disabled { opacity: 0.3; cursor: default; }
+  .loadoutHint { font-size: 9px; color: var(--dim); margin-top: 7px; text-align: left; letter-spacing: 0.05em; }
+
   .chip {
     font-family: var(--mono);
     font-size: 9px;
@@ -1423,7 +1451,7 @@ function maxEnergyFor() { return 100 + pilot.skills.energy * 10; }
 function speedFor()     { return 320 * (1 + pilot.skills.speed * 0.05); }
 function dmgMult()      { return 1 + pilot.skills.damage * 0.08; }
 function maxLives()     { return 3 + pilot.skills.lifecap; }               // hard cap 6
-function slotsUnlocked() { return pilot.level >= 10 ? 3 : pilot.level >= 4 ? 2 : 1; }
+function slotsUnlocked() { return 3; }   // blaster + 2 secondary slots, all available from the start
 function blasterBolts() { return pilot.level >= 18 ? 5 : pilot.level >= 12 ? 4 : pilot.level >= 6 ? 3 : 2; }
 
 const XP_PER_LEVEL = 300;  // to advance from level L costs L * 300 xp
@@ -2513,16 +2541,23 @@ function renderStore() {
   const row = (inner) => h.push('<div class="shopRow">' + inner + "</div>");
   const head = (txt) => h.push('<div class="shopHead">' + txt + "</div>");
 
-  // -- loadout: 3 slots fired by C / V / B
-  head("LOADOUT");
-  const slotKeys = ["C", "V", "B"];
-  for (let s = 0; s < 3; s++) {
-    const unlocked = s < slotsUnlocked();
-    const label = !unlocked ? "LOCKED &mdash; PILOT LVL " + (s === 1 ? 4 : 10)
-      : s === 0 ? "BLASTER (fixed)"
-      : pilot.loadout[s] ? WEAPON_NAMES[pilot.loadout[s]] : "EMPTY &mdash; tap to equip";
-    row(`<div class="info"><b>SLOT ${s + 1} [${slotKeys[s]}]</b><br>${unlocked && s > 0 ? "tap to cycle owned weapons" : "&nbsp;"}</div>
-      <button class="buyBtn" data-act="slot" data-i="${s}" ${!unlocked || s === 0 ? "disabled" : ""}>${label}</button>`);
+  // -- loadout: pick which owned weapon rides in each of the 2 secondary slots.
+  //    Slot 1 [C] is always the blaster; slots V and B are your two second guns.
+  head("SECONDARY GUNS &mdash; LOAD OR SWITCH");
+  const owned = pilot.weapons.filter((w) => w !== "blaster");
+  const slotKey = { 1: "V", 2: "B" };
+  for (let s = 1; s <= 2; s++) {
+    const other = s === 1 ? 2 : 1;
+    let chips = `<button class="gunChip ${!pilot.loadout[s] ? "active" : ""}" data-act="slot" data-slot="${s}" data-w="">OFF</button>`;
+    for (const w of owned) {
+      const isCur = pilot.loadout[s] === w;
+      const inOther = pilot.loadout[other] === w;
+      chips += `<button class="gunChip ${isCur ? "active" : ""}" data-act="slot" data-slot="${s}" data-w="${w}"
+        ${inOther && !isCur ? "disabled" : ""}>${WEAPON_NAMES[w]}</button>`;
+    }
+    const hint = owned.length ? "" : `<div class="loadoutHint">buy a weapon in the ARMORY below, then load it here</div>`;
+    h.push(`<div class="loadoutSlot"><div class="loadoutSlotLabel">SLOT ${s + 1} &nbsp;&mdash;&nbsp; FIRE [${slotKey[s]}]</div>` +
+           `<div class="gunPicker">${chips}</div>${hint}</div>`);
   }
 
   // -- armory: buy weapons once, gated by pilot level
@@ -2597,13 +2632,14 @@ function spendSkill(id) {
   sfx.buy();
 }
 
-function cycleSlot(s) {
-  if (s === 0 || s >= slotsUnlocked()) { sfx.denied(); return; }
-  // options: empty, then each owned weapon not already in another slot
-  const used = pilot.loadout.filter((w, i) => i !== s && w);
-  const options = [null, ...pilot.weapons.filter((w) => !used.includes(w))];
-  const cur = options.indexOf(pilot.loadout[s]);
-  pilot.loadout[s] = options[(cur + 1) % options.length];
+// load a specific weapon (or null = OFF) into a secondary slot
+function setSlot(s, weaponId) {
+  if (s !== 1 && s !== 2) return;
+  if (weaponId && !pilot.weapons.includes(weaponId)) return;
+  const other = s === 1 ? 2 : 1;
+  if (weaponId && pilot.loadout[other] === weaponId) return;   // no duplicate across slots
+  if (pilot.loadout[s] === weaponId) return;                   // already loaded
+  pilot.loadout[s] = weaponId;
   savePilot();
   sfx.pickup();
 }
@@ -2619,7 +2655,7 @@ document.getElementById("storeItems").addEventListener("click", (e) => {
   const d = e.target.dataset || {};
   if (d.act === "buyw") buyWeapon(d.id);
   else if (d.act === "sup") buySupply(d.id);
-  else if (d.act === "slot") cycleSlot(Number(d.i));
+  else if (d.act === "slot") setSlot(Number(d.slot), d.w || null);
   else return;
   renderStore();
   updateHUD();
@@ -2865,7 +2901,7 @@ function frame(now) {
 requestAnimationFrame(frame);
 
 // ---------- Version + auto-update ----------
-const APP_VERSION = "1.3.1";
+const APP_VERSION = "1.4";
 document.getElementById("versionLine").textContent = "v" + APP_VERSION;
 
 // A new build ships a byte-changed sw.js (its CACHE constant is bumped), so the
