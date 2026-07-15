@@ -1292,25 +1292,37 @@ function canvasPoint(e) {
   };
 }
 canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+
+// Movement is bound to ONE pointer id, tracked on the window. Two fixes for
+// mobile multitouch: (1) no setPointerCapture — capturing the drag finger made
+// a second touch (a fire button) cancel it and freeze the ship; (2) up/cancel
+// only clear movement when it's the drag finger, so lifting the fire finger no
+// longer stops the ship. Listening on window keeps the drag alive even if the
+// finger slides off the canvas or across a button.
+let movePointerId = null;
 canvas.addEventListener("pointerdown", (e) => {
   if (e.button === 2) return;   // right button unused
-  canvas.setPointerCapture(e.pointerId);
+  movePointerId = e.pointerId;
   pointer.active = true;
   Object.assign(pointer, canvasPoint(e));
 });
-canvas.addEventListener("pointermove", (e) => {
-  if (pointer.active) Object.assign(pointer, canvasPoint(e));
+addEventListener("pointermove", (e) => {
+  if (pointer.active && e.pointerId === movePointerId) Object.assign(pointer, canvasPoint(e));
 });
-addEventListener("pointerup", () => { pointer.active = false; });
-addEventListener("pointercancel", () => { pointer.active = false; });
+function endMove(e) {
+  if (e.pointerId === movePointerId) { pointer.active = false; movePointerId = null; }
+}
+addEventListener("pointerup", endMove);
+addEventListener("pointercancel", endMove);
 
-// on-screen fire buttons (touch devices): hold to fire weapon slots 2 and 3
+// on-screen fire buttons (touch devices): hold to fire weapon slots 2 and 3.
+// stopPropagation keeps their touches entirely out of the movement handlers.
 const touchFire = [false, false, false];
 for (const [btnId, slot] of [["fire1", 1], ["fire2", 2]]) {
   const b = document.getElementById(btnId);
-  b.addEventListener("pointerdown", (e) => { e.preventDefault(); touchFire[slot] = true; });
+  b.addEventListener("pointerdown", (e) => { e.preventDefault(); e.stopPropagation(); touchFire[slot] = true; });
   for (const ev of ["pointerup", "pointercancel", "pointerleave"]) {
-    b.addEventListener(ev, () => { touchFire[slot] = false; });
+    b.addEventListener(ev, (e) => { e.stopPropagation(); touchFire[slot] = false; });
   }
   b.addEventListener("contextmenu", (e) => e.preventDefault());
 }
@@ -2718,7 +2730,7 @@ function frame(now) {
 requestAnimationFrame(frame);
 
 // ---------- Version + auto-update ----------
-const APP_VERSION = "1.0";
+const APP_VERSION = "1.1";
 document.getElementById("versionLine").textContent = "v" + APP_VERSION;
 
 // A new build ships a byte-changed sw.js (its CACHE constant is bumped), so the

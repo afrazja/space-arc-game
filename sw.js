@@ -2,7 +2,7 @@
 // Pages are network-first (players get new versions on the next load); other
 // assets are cache-first for instant loads. Bump CACHE on every release so the
 // browser installs a fresh worker and the in-game UPDATE banner appears.
-const CACHE = "space-arc-v1";
+const CACHE = "space-arc-v2";
 const ASSETS = ["index.html", "manifest.webmanifest", "icon-192.png", "icon-512.png"];
 
 self.addEventListener("install", (e) => {
