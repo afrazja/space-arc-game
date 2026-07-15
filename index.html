@@ -30,18 +30,48 @@
     user-select: none;
     -webkit-tap-highlight-color: transparent;
   }
+  :root { --ctrl-h: 52px; }              /* control-bar height (just the life heart) */
+  @media (pointer: coarse) {
+    :root { --ctrl-h: 116px; }           /* taller on touch: room for the fire buttons */
+  }
   #stage {
     position: fixed;
     inset: 0;
     display: flex;
+    flex-direction: column;
     align-items: center;
     justify-content: center;
+    gap: 6px;
   }
   #frame {
     position: relative;
     aspect-ratio: 480 / 720;
-    height: min(100vh, calc(100vw * 720 / 480));
+    /* leave room below the play field for the control bar so the ship never
+       slides under the fire buttons or the life heart */
+    height: min(calc(100vh - var(--ctrl-h)), calc(100vw * 720 / 480));
     max-width: 100vw;
+    flex-shrink: 0;
+  }
+  #controlBar {
+    height: var(--ctrl-h);
+    flex-shrink: 0;
+    width: min(100vw, calc((100vh - var(--ctrl-h)) * 480 / 720));
+    max-width: 460px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 0 clamp(14px, 5vw, 30px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    box-sizing: border-box;
+  }
+  #lifeDisplay {
+    flex: 1;
+    text-align: center;
+    color: var(--danger);
+    font-size: 16px;
+    letter-spacing: 0.1em;
+    font-variant-numeric: tabular-nums;
   }
   canvas {
     position: absolute;
@@ -69,32 +99,30 @@
   .hud.top { top: env(safe-area-inset-top, 0px); align-items: flex-start; gap: 12px; }
   .hud.bottom { bottom: env(safe-area-inset-bottom, 0px); align-items: flex-end; }
 
-  /* ---------- Touch fire buttons (shown on touch screens only) ---------- */
+  /* ---------- Touch fire buttons (in the control bar, touch screens only) ---------- */
   .fireBtn {
     display: none;
-    position: absolute;
-    bottom: calc(18px + env(safe-area-inset-bottom, 0px));
-    width: 68px;
-    height: 68px;
+    flex-shrink: 0;
+    width: 74px;
+    height: 74px;
     border-radius: 50%;
     border: 1.5px solid var(--line);
-    background: rgba(11, 21, 38, 0.75);
+    background: rgba(11, 21, 38, 0.85);
     color: var(--star);
     font-family: var(--mono);
     font-size: 10px;
     letter-spacing: 0.06em;
     align-items: center;
     justify-content: center;
+    text-align: center;
     touch-action: none;
     -webkit-user-select: none;
     user-select: none;
-    z-index: 5;
   }
   .fireBtn:active { background: rgba(77, 227, 255, 0.25); border-color: var(--cyan); }
   .fireBtn.off { opacity: 0.35; }
   @media (pointer: coarse) {
     .fireBtn { display: flex; }
-    #lifeCol { margin-bottom: 96px; }   /* lift the life bar clear of the right button */
   }
   .hud .label { color: var(--dim); font-size: 10px; letter-spacing: 0.22em; }
   #levelTag {
@@ -108,18 +136,6 @@
     font-variant-numeric: tabular-nums;
   }
   #levelTag span { color: var(--star); font-size: 14px; }
-  #lifeCol { width: 116px; text-align: right; }
-  #livesTxt {
-    color: var(--danger);
-    font-size: 14px;
-    letter-spacing: 0.1em;
-    margin-bottom: 4px;
-    font-variant-numeric: tabular-nums;
-  }
-  #lifeRow { display: flex; align-items: center; gap: 6px; }
-  #lifeLbl { font-size: 9px; color: var(--dim); letter-spacing: 0.18em; }
-  #lifeRow #reviveBar { flex: 1; margin-top: 0; }
-
   #statusCol {
     width: 112px;
     flex-shrink: 0;
@@ -136,13 +152,6 @@
     letter-spacing: 0.1em;
     font-variant-numeric: tabular-nums;
   }
-  #reviveBar {
-    margin-top: 2px;
-    height: 4px;
-    border: 1px solid var(--line);
-    background: rgba(255, 210, 77, 0.08);
-  }
-  #reviveFill { height: 100%; width: 0%; background: #ffd24d; }
   #xpLine {
     font-size: 12px;
     color: var(--cyan);
@@ -365,20 +374,6 @@
       </div>
     </div>
 
-    <div class="hud bottom">
-      <div></div>
-      <div id="lifeCol">
-        <div id="livesTxt">&#9829;1</div>
-        <div id="lifeRow">
-          <span id="lifeLbl">LIFE</span>
-          <div id="reviveBar" title="fill it to gain a life"><div id="reviveFill"></div></div>
-        </div>
-      </div>
-    </div>
-
-    <button class="fireBtn" id="fire1" style="left: 16px;">&mdash;</button>
-    <button class="fireBtn" id="fire2" style="right: 16px;">&mdash;</button>
-
     <div class="overlay" id="startScreen">
       <h1 class="title">SPACE ARC</h1>
       <p class="subtitle">DEFENDER PROTOCOL // SECTOR 7</p>
@@ -444,6 +439,12 @@
       <p class="subtitle" id="bestScore"></p>
       <button class="btn" id="restartBtn">RE-LAUNCH</button>
     </div>
+  </div>
+
+  <div id="controlBar">
+    <button class="fireBtn" id="fire1">&mdash;</button>
+    <div id="lifeDisplay"><span id="livesTxt">&#9829;1</span></div>
+    <button class="fireBtn" id="fire2">&mdash;</button>
   </div>
 </div>
 
@@ -2389,7 +2390,6 @@ function drawPopups() {
 
 // ---------- HUD / UI ----------
 const el = {
-  reviveFill: document.getElementById("reviveFill"),
   credits: document.getElementById("credits"),
   livesTxt: document.getElementById("livesTxt"),
   xpNow: document.getElementById("xpNow"),
@@ -2399,7 +2399,6 @@ const el = {
 function updateHUD() {
   el.credits.textContent = state.credits;
   el.levelNum.textContent = state.level;
-  el.reviveFill.style.width = player.revive + "%";
   el.livesTxt.textContent = "♥" + player.lives;
   el.xpNow.textContent = state.xpEarned;   // XP gathered this level, banked at level end
   // touch fire buttons mirror slots 2 / 3: weapon name, dimmed when unusable
@@ -2730,7 +2729,7 @@ function frame(now) {
 requestAnimationFrame(frame);
 
 // ---------- Version + auto-update ----------
-const APP_VERSION = "1.1";
+const APP_VERSION = "1.2";
 document.getElementById("versionLine").textContent = "v" + APP_VERSION;
 
 // A new build ships a byte-changed sw.js (its CACHE constant is bumped), so the
